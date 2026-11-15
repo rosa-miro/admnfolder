@@ -1,0 +1,471 @@
+
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADM FOLDER | Admin</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f5efe6;color:#25201b;font-family:Arial,sans-serif}
+header{background:#fffaf3;padding:18px 5%;border-bottom:1px solid #e5d7c5;display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap}
+h1{font-size:21px;margin:0}
+h2{margin-top:0}
+a{color:#087568;text-decoration:none;font-weight:bold}
+main{max-width:1100px;margin:28px auto;padding:0 16px}
+.subtitle{color:#85776b;line-height:1.6}
+.toolbar{display:flex;gap:10px;margin:25px 0;flex-wrap:wrap}
+input,textarea{width:100%;border:1px solid #ded2c2;border-radius:9px;padding:12px;font:inherit;background:white}
+textarea{min-height:95px;resize:vertical}
+input[type=checkbox]{width:auto;accent-color:#087568}
+#search{flex:1;min-width:180px}
+button{border:0;background:#087568;color:white;padding:12px 18px;border-radius:9px;cursor:pointer;font-weight:bold}
+button:hover{background:#06584f}
+button:disabled{opacity:.5;cursor:wait}
+.danger{background:#b93232}
+.danger:hover{background:#8d2424}
+.secondary{background:#695c4f}
+.collection,.panel{background:#fffaf3;border:1px solid #e6d9c9;border-radius:15px;padding:20px;margin-bottom:16px}
+.collection h3{margin:0 0 17px}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}
+.field label{display:block;font-size:13px;font-weight:bold;margin-bottom:7px}
+.full{grid-column:1/-1}
+.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;flex-wrap:wrap}
+.notice{background:#e2f4eb;color:#075f49;padding:13px;border-radius:9px;margin-bottom:18px}
+.error{background:#ffe4e4;color:#8b2020}
+.hidden{display:none!important}
+.login{max-width:420px;margin:70px auto}
+.login input{margin:8px 0 15px}
+.checks{display:flex;gap:20px;flex-wrap:wrap;margin:12px 0}
+.checks label{display:flex;align-items:center;gap:7px}
+.media{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+.media img,.media video{width:100%;max-height:220px;object-fit:contain;background:#eee;border-radius:10px}
+.media-box{min-width:0;background:#f4eee5;border-radius:10px;padding:12px}
+.media-box input{margin:10px 0}
+.muted{color:#85776b;font-size:13px}
+@media(max-width:650px){
+.fields,.media{grid-template-columns:1fr}
+header{padding:16px}
+.actions button{flex:1}
+}
+</style>
+</head>
+<body>
+
+<header>
+<h1>ADM FOLDER | ADMIN</h1>
+<div>
+<a href="/">Ver loja ↗</a>
+<button id="logout" class="secondary hidden">Sair</button>
+</div>
+</header>
+
+<main>
+<div id="notice" class="notice hidden" role="status"></div>
+
+<section id="loginPanel" class="panel login">
+<h2>Entrar no painel</h2>
+<p class="subtitle">Acesso exclusivo do administrador.</p>
+<form id="loginForm">
+<label>Utilizador</label>
+<input id="username" autocomplete="username" required>
+<label>Palavra-passe</label>
+<input id="password" type="password" autocomplete="current-password" required>
+<button type="submit">Entrar</button>
+</form>
+</section>
+
+<section id="dashboard" class="hidden">
+<h2>Gestão de coleções</h2>
+<p class="subtitle">
+Cria, edita, publica e elimina coleções.
+As alterações são guardadas no PostgreSQL.
+</p>
+
+<div class="toolbar">
+<input id="search" placeholder="Pesquisar coleção...">
+<button id="newCollection">+ Nova coleção</button>
+<button id="refresh" class="secondary">Atualizar</button>
+</div>
+
+<p id="total" class="muted"></p>
+<div id="collections"></div>
+</section>
+</main>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+let collections = [];
+
+function notify(message, error = false) {
+  const el = $("notice");
+  el.textContent = message;
+  el.className = "notice" + (error ? " error" : "");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      ...(options.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
+      ...(options.headers || {})
+    }
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401) showLogin();
+    throw new Error(data.erro || "Erro no servidor.");
+  }
+
+  return data;
+}
+
+function showLogin() {
+  $("loginPanel").classList.remove("hidden");
+  $("dashboard").classList.add("hidden");
+  $("logout").classList.add("hidden");
+}
+
+function showDashboard() {
+  $("loginPanel").classList.add("hidden");
+  $("dashboard").classList.remove("hidden");
+  $("logout").classList.remove("hidden");
+}
+
+$("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+
+  try {
+    await api("/api/admin/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("username").value,
+        password: $("password").value
+      })
+    });
+
+    $("password").value = "";
+    showDashboard();
+    await load();
+  } catch (err) {
+    notify(err.message, true);
+  }
+});
+
+$("logout").onclick = async () => {
+  try {
+    await api("/api/admin/logout", { method: "POST" });
+    showLogin();
+    notify("Sessão terminada.");
+  } catch (err) {
+    notify(err.message, true);
+  }
+};
+
+function field(label, key, value, type = "text") {
+  const wrapper = document.createElement("div");
+  wrapper.className = "field" + (type === "textarea" ? " full" : "");
+
+  const caption = document.createElement("label");
+  caption.textContent = label;
+
+  const input = type === "textarea"
+    ? document.createElement("textarea")
+    : document.createElement("input");
+
+  if (type !== "textarea") input.type = type;
+  if (type === "number") {
+    input.min = "0";
+    input.step = "0.01";
+  }
+
+  input.value = value ?? "";
+  input.dataset.field = key;
+
+  wrapper.append(caption, input);
+  return wrapper;
+}
+
+function check(label, key, checked) {
+  const wrapper = document.createElement("label");
+  const input = document.createElement("input");
+
+  input.type = "checkbox";
+  input.checked = Boolean(checked);
+  input.dataset.field = key;
+
+  wrapper.append(input, document.createTextNode(label));
+  return wrapper;
+}
+
+function mediaBox(item, type) {
+  const box = document.createElement("div");
+  box.className = "media-box";
+
+  const title = document.createElement("strong");
+  title.textContent = type === "imagem" ? "Fotografia" : "Vídeo";
+  box.append(title);
+
+  const url = item[type];
+
+  if (url) {
+    const media = document.createElement(
+      type === "imagem" ? "img" : "video"
+    );
+    media.src = url;
+
+    if (type === "video") {
+      media.controls = true;
+      media.preload = "metadata";
+    } else {
+      media.alt = "Capa da coleção";
+    }
+
+    box.append(media);
+  }
+
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = type === "imagem"
+    ? "image/jpeg,image/png,image/webp"
+    : "video/mp4,video/webm";
+
+  const button = document.createElement("button");
+  button.textContent = "Enviar " + type;
+
+  button.onclick = async () => {
+    if (!input.files.length) {
+      return notify("Seleciona um ficheiro.", true);
+    }
+
+    const file = input.files[0];
+
+    if (file.size > 100 * 1024 * 1024) {
+      return notify("O ficheiro ultrapassa 100 MB.", true);
+    }
+
+    const form = new FormData();
+    form.append("ficheiro", file);
+
+    button.disabled = true;
+    button.textContent = "A enviar...";
+
+    try {
+      await api(
+        `/api/admin/colecoes/${item.id}/upload/${type}`,
+        { method: "POST", body: form }
+      );
+      notify("Ficheiro enviado com sucesso!");
+      await load();
+    } catch (err) {
+      notify(err.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Enviar " + type;
+    }
+  };
+
+  box.append(input, button);
+  return box;
+}
+
+function readCard(card) {
+  const data = {};
+
+  card.querySelectorAll("[data-field]").forEach(input => {
+    data[input.dataset.field] = input.type === "checkbox"
+      ? input.checked
+      : input.value.trim();
+  });
+
+  data.preco = Number(data.preco);
+  data.preco_antigo = Number(data.preco_antigo);
+
+  if (!data.nome ||
+      !Number.isFinite(data.preco) ||
+      data.preco <= 0 ||
+      !Number.isFinite(data.preco_antigo) ||
+      data.preco_antigo < 0) {
+    throw new Error("Verifica o nome e os preços.");
+  }
+
+  return data;
+}
+
+function createCard(item) {
+  const card = document.createElement("article");
+  card.className = "collection";
+
+  const heading = document.createElement("h3");
+  heading.textContent = `Coleção #${item.id} — ${item.nome}`;
+
+  const fields = document.createElement("div");
+  fields.className = "fields";
+
+  fields.append(
+    field("Nome da coleção", "nome", item.nome),
+    field("Preço atual ($)", "preco", item.preco, "number"),
+    field("Preço anterior ($)", "preco_antigo",
+      item.preco_antigo, "number"),
+    field("Descrição", "descricao", item.descricao, "textarea"),
+    field("Etiqueta 1", "etiqueta1", item.etiqueta1),
+    field("Etiqueta 2", "etiqueta2", item.etiqueta2)
+  );
+
+  const checks = document.createElement("div");
+  checks.className = "checks";
+  checks.append(
+    check("Publicado", "publicado", item.publicado),
+    check("Popular", "popular", item.popular),
+    check("Novo", "novo", item.novo)
+  );
+
+  const media = document.createElement("div");
+  media.className = "media";
+  media.append(
+    mediaBox(item, "imagem"),
+    mediaBox(item, "video")
+  );
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  const save = document.createElement("button");
+  save.textContent = "Guardar alterações";
+
+  save.onclick = async () => {
+    save.disabled = true;
+
+    try {
+      const data = readCard(card);
+
+      await api(`/api/admin/colecoes/${item.id}`, {
+        method: "PUT",
+        body: JSON.stringify(data)
+      });
+
+      notify(`Coleção #${item.id} guardada!`);
+      await load();
+    } catch (err) {
+      notify(err.message, true);
+    } finally {
+      save.disabled = false;
+    }
+  };
+
+  const remove = document.createElement("button");
+  remove.className = "danger";
+  remove.textContent = "Eliminar";
+
+  remove.onclick = async () => {
+    const confirmed = confirm(
+      `Eliminar definitivamente a coleção "${item.nome}"?`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      await api(`/api/admin/colecoes/${item.id}`, {
+        method: "DELETE"
+      });
+
+      notify("Coleção eliminada.");
+      await load();
+    } catch (err) {
+      notify(err.message, true);
+    }
+  };
+
+  actions.append(save, remove);
+  card.append(heading, fields, checks, media, actions);
+
+  return card;
+}
+
+function render() {
+  const q = $("search").value.trim().toLowerCase();
+  const container = $("collections");
+  container.replaceChildren();
+
+  const filtered = collections.filter(item =>
+    item.nome.toLowerCase().includes(q) ||
+    String(item.id).includes(q)
+  );
+
+  $("total").textContent =
+    `${collections.length} coleções registadas`;
+
+  for (const item of filtered) {
+    container.append(createCard(item));
+  }
+}
+
+async function load() {
+  try {
+    collections = await api("/api/admin/colecoes");
+    render();
+  } catch (err) {
+    notify(err.message, true);
+  }
+}
+
+$("search").addEventListener("input", render);
+$("refresh").onclick = load;
+
+$("newCollection").onclick = async () => {
+  const name = prompt("Nome da nova coleção:");
+
+  if (!name || !name.trim()) return;
+
+  try {
+    const item = await api("/api/admin/colecoes", {
+      method: "POST",
+      body: JSON.stringify({
+        nome: name.trim(),
+        descricao: "",
+        preco: 40,
+        preco_antigo: 60,
+        etiqueta1: "Digital Collection",
+        etiqueta2: "Video Preview",
+        publicado: false,
+        popular: false,
+        novo: true
+      })
+    });
+
+    $("search").value = "";
+    await load();
+
+    notify(
+      `Coleção #${item.id} criada! Edita os dados e envia os ficheiros.`
+    );
+  } catch (err) {
+    notify(err.message, true);
+  }
+};
+
+(async () => {
+  try {
+    const result = await api("/api/admin/me");
+
+    if (result.autenticado) {
+      showDashboard();
+      await load();
+    } else {
+      showLogin();
+    }
+  } catch {
+    showLogin();
+  }
+})();
+</script>
+</body>
+</html>
